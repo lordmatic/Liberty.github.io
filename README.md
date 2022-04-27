@@ -1,384 +1,489 @@
-[![Build Status](https://travis-ci.org/A11yance/axobject-query.svg?branch=master)](https://travis-ci.org/A11yance/axobject-query)
+# ws: a Node.js WebSocket library
 
-**NOTICE: The API for AXObject Query is very much under development until a major version release. Please be aware that data structures might change in minor version releases before 1.0.0 is released.**
+[![Version npm](https://img.shields.io/npm/v/ws.svg?logo=npm)](https://www.npmjs.com/package/ws)
+[![CI](https://img.shields.io/github/workflow/status/websockets/ws/CI/master?label=CI&logo=github)](https://github.com/websockets/ws/actions?query=workflow%3ACI+branch%3Amaster)
+[![Coverage Status](https://img.shields.io/coveralls/websockets/ws/master.svg?logo=coveralls)](https://coveralls.io/github/websockets/ws)
 
-# AXObject Query
+ws is a simple to use, blazing fast, and thoroughly tested WebSocket client and
+server implementation.
 
-Approximate model of the [Chrome AXObject](https://cs.chromium.org/chromium/src/third_party/WebKit/Source/modules/accessibility/AXObject.h).
+Passes the quite extensive Autobahn test suite: [server][server-report],
+[client][client-report].
 
-The project attempts to map the AXObject concepts to the [WAI-ARIA 1.1 Roles Model](https://www.w3.org/TR/wai-aria-1.1/#roles) so that a complete representation of the semantic HTML layer, as it is exposed assistive technology, can be obtained.
+**Note**: This module does not work in the browser. The client in the docs is a
+reference to a back end with the role of a client in the WebSocket
+communication. Browser clients must use the native
+[`WebSocket`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket)
+object. To make the same code work seamlessly on Node.js and the browser, you
+can use one of the many wrappers available on npm, like
+[isomorphic-ws](https://github.com/heineiuo/isomorphic-ws).
 
-## Utilities
+## Table of Contents
 
-### AXObjects
+- [Protocol support](#protocol-support)
+- [Installing](#installing)
+  - [Opt-in for performance](#opt-in-for-performance)
+- [API docs](#api-docs)
+- [WebSocket compression](#websocket-compression)
+- [Usage examples](#usage-examples)
+  - [Sending and receiving text data](#sending-and-receiving-text-data)
+  - [Sending binary data](#sending-binary-data)
+  - [Simple server](#simple-server)
+  - [External HTTP/S server](#external-https-server)
+  - [Multiple servers sharing a single HTTP/S server](#multiple-servers-sharing-a-single-https-server)
+  - [Client authentication](#client-authentication)
+  - [Server broadcast](#server-broadcast)
+  - [Round-trip time](#round-trip-time)
+  - [Use the Node.js streams API](#use-the-nodejs-streams-api)
+  - [Other examples](#other-examples)
+- [FAQ](#faq)
+  - [How to get the IP address of the client?](#how-to-get-the-ip-address-of-the-client)
+  - [How to detect and close broken connections?](#how-to-detect-and-close-broken-connections)
+  - [How to connect via a proxy?](#how-to-connect-via-a-proxy)
+- [Changelog](#changelog)
+- [License](#license)
 
-```javascript
-import { AXObjects } from 'axobject-query';
+## Protocol support
+
+- **HyBi drafts 07-12** (Use the option `protocolVersion: 8`)
+- **HyBi drafts 13-17** (Current default, alternatively option
+  `protocolVersion: 13`)
+
+## Installing
+
+```
+npm install ws
 ```
 
-AXObjects are mapped to their HTML and ARIA concepts in the `relatedConcepts` field.
+### Opt-in for performance
 
-The `type` field is a loose association of an AXObject to the `window`, `structure` and `widget` abstract roles in ARIA. The `generic` value is given to `DivRole`; it does not exist in ARIA. Divs are special in HTML in the way that they are used as generic containers. Span might have also been associated with a generic type except that there is no `SpanRole` AXObject.
+There are 2 optional modules that can be installed along side with the ws
+module. These modules are binary addons which improve certain operations.
+Prebuilt binaries are available for the most popular platforms so you don't
+necessarily need to have a C++ compiler installed on your machine.
 
+- `npm install --save-optional bufferutil`: Allows to efficiently perform
+  operations such as masking and unmasking the data payload of the WebSocket
+  frames.
+- `npm install --save-optional utf-8-validate`: Allows to efficiently check if a
+  message contains valid UTF-8.
+
+## API docs
+
+See [`/doc/ws.md`](./doc/ws.md) for Node.js-like documentation of ws classes and
+utility functions.
+
+## WebSocket compression
+
+ws supports the [permessage-deflate extension][permessage-deflate] which enables
+the client and server to negotiate a compression algorithm and its parameters,
+and then selectively apply it to the data payloads of each WebSocket message.
+
+The extension is disabled by default on the server and enabled by default on the
+client. It adds a significant overhead in terms of performance and memory
+consumption so we suggest to enable it only if it is really needed.
+
+Note that Node.js has a variety of issues with high-performance compression,
+where increased concurrency, especially on Linux, can lead to [catastrophic
+memory fragmentation][node-zlib-bug] and slow performance. If you intend to use
+permessage-deflate in production, it is worthwhile to set up a test
+representative of your workload and ensure Node.js/zlib will handle it with
+acceptable performance and memory usage.
+
+Tuning of permessage-deflate can be done via the options defined below. You can
+also use `zlibDeflateOptions` and `zlibInflateOptions`, which is passed directly
+into the creation of [raw deflate/inflate streams][node-zlib-deflaterawdocs].
+
+See [the docs][ws-server-options] for more options.
+
+```js
+import WebSocket, { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({
+  port: 8080,
+  perMessageDeflate: {
+    zlibDeflateOptions: {
+      // See zlib defaults.
+      chunkSize: 1024,
+      memLevel: 7,
+      level: 3
+    },
+    zlibInflateOptions: {
+      chunkSize: 10 * 1024
+    },
+    // Other options settable:
+    clientNoContextTakeover: true, // Defaults to negotiated value.
+    serverNoContextTakeover: true, // Defaults to negotiated value.
+    serverMaxWindowBits: 10, // Defaults to negotiated value.
+    // Below options specified as default values.
+    concurrencyLimit: 10, // Limits zlib concurrency for perf.
+    threshold: 1024 // Size (in bytes) below which messages
+    // should not be compressed if context takeover is disabled.
+  }
+});
 ```
-Map {
-  'AbbrRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'AlertDialogRole' => { relatedConcepts: [ [Object] ], type: 'window' },
-  'AlertRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'AnnotationRole' => { relatedConcepts: [], type: 'structure' },
-  'ApplicationRole' => { relatedConcepts: [ [Object] ], type: 'window' },
-  'ArticleRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'AudioRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'BannerRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'BlockquoteRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'BusyIndicatorRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'ButtonRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'CanvasRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'CaptionRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'CellRole' => { relatedConcepts: [ [Object], [Object], [Object] ], type: 'widget' },
-  'CheckBoxRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'ColorWellRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'ColumnHeaderRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'ColumnRole' => { relatedConcepts: [], type: 'structure' },
-  'ComboBoxRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'ComplementaryRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'ContentInfoRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'DateRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'DateTimeRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'DefinitionRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'DescriptionListDetailRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'DescriptionListRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'DescriptionListTermRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'DetailsRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'DialogRole' => { relatedConcepts: [ [Object], [Object] ], type: 'window' },
-  'DirectoryRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'DisclosureTriangleRole' => { relatedConcepts: [], type: 'widget' },
-  'DivRole' => { relatedConcepts: [ [Object] ], type: 'generic' },
-  'DocumentRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'EmbeddedObjectRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'FeedRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'FigcaptionRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'FigureRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'FooterRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'FormRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'GridRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'GroupRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'HeadingRole' => { relatedConcepts: [ [Object], [Object], [Object], [Object], [Object], [Object], [Object] ], type: 'structure' },
-  'IframePresentationalRole' => { relatedConcepts: [], type: 'window' },
-  'IframeRole' => { relatedConcepts: [ [Object] ], type: 'window' },
-  'IgnoredRole' => { relatedConcepts: [], type: 'structure' },
-  'ImageMapLinkRole' => { relatedConcepts: [], type: 'widget' },
-  'ImageMapRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'ImageRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'InlineTextBoxRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'InputTimeRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'LabelRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'LegendRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'LineBreakRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'LinkRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'ListBoxOptionRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'ListBoxRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'ListItemRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'ListMarkerRole' => { relatedConcepts: [], type: 'structure' },
-  'ListRole' => { relatedConcepts: [ [Object], [Object], [Object] ], type: 'structure' },
-  'LogRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'MainRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'MarkRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'MarqueeRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'MathRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'MenuBarRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'MenuButtonRole' => { relatedConcepts: [], type: 'widget' },
-  'MenuItemRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'MenuItemCheckBoxRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'MenuItemRadioRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'MenuListOptionRole' => { relatedConcepts: [], type: 'widget' },
-  'MenuListPopupRole' => { relatedConcepts: [], type: 'widget' },
-  'MenuRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'MeterRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'NavigationRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'NoneRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'NoteRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'OutlineRole' => { relatedConcepts: [], type: 'structure' },
-  'ParagraphRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'PopUpButtonRole' => { relatedConcepts: [], type: 'widget' },
-  'PreRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'PresentationalRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'ProgressIndicatorRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'RadioButtonRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'RadioGroupRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'RegionRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'RootWebAreaRole' => { relatedConcepts: [], type: 'structure' },
-  'RowHeaderRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'RowRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'RubyRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'RulerRole' => { relatedConcepts: [], type: 'structure' },
-  'ScrollAreaRole' => { relatedConcepts: [], type: 'structure' },
-  'ScrollBarRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'SeamlessWebAreaRole' => { relatedConcepts: [], type: 'structure' },
-  'SearchRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'SearchBoxRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'SliderRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'SliderThumbRole' => { relatedConcepts: [], type: 'structure' },
-  'SpinButtonRole' => { relatedConcepts: [ [Object], [Object] ], type: 'widget' },
-  'SpinButtonPartRole' => { relatedConcepts: [], type: 'structure' },
-  'SplitterRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'StaticTextRole' => { relatedConcepts: [], type: 'structure' },
-  'StatusRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'SVGRootRole' => { relatedConcepts: [], type: 'structure' },
-  'SwitchRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'TabGroupRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'TabRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'TableHeaderContainerRole' => { relatedConcepts: [], type: 'structure' },
-  'TableRole' => { relatedConcepts: [ [Object], [Object] ], type: 'structure' },
-  'TabListRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'TabPanelRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'TermRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'TextFieldRole' => { relatedConcepts: [ [Object], [Object], [Object] ], type: 'widget' },
-  'TimeRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'TimerRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'ToggleButtonRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'ToolbarRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'TreeRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'TreeGridRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'TreeItemRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'UserInterfaceTooltipRole' => { relatedConcepts: [ [Object] ], type: 'structure' },
-  'VideoRole' => { relatedConcepts: [ [Object] ], type: 'widget' },
-  'WebAreaRole' => { relatedConcepts: [], type: 'structure' },
-  'WindowRole' => { relatedConcepts: [], type: 'window' }
+
+The client will only use the extension if it is supported and enabled on the
+server. To always disable the extension on the client set the
+`perMessageDeflate` option to `false`.
+
+```js
+import WebSocket from 'ws';
+
+const ws = new WebSocket('ws://www.host.com/path', {
+  perMessageDeflate: false
+});
+```
+
+## Usage examples
+
+### Sending and receiving text data
+
+```js
+import WebSocket from 'ws';
+
+const ws = new WebSocket('ws://www.host.com/path');
+
+ws.on('open', function open() {
+  ws.send('something');
+});
+
+ws.on('message', function message(data) {
+  console.log('received: %s', data);
+});
+```
+
+### Sending binary data
+
+```js
+import WebSocket from 'ws';
+
+const ws = new WebSocket('ws://www.host.com/path');
+
+ws.on('open', function open() {
+  const array = new Float32Array(5);
+
+  for (var i = 0; i < array.length; ++i) {
+    array[i] = i / 2;
+  }
+
+  ws.send(array);
+});
+```
+
+### Simple server
+
+```js
+import { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('connection', function connection(ws) {
+  ws.on('message', function message(data) {
+    console.log('received: %s', data);
+  });
+
+  ws.send('something');
+});
+```
+
+### External HTTP/S server
+
+```js
+import { createServer } from 'https';
+import { readFileSync } from 'fs';
+import { WebSocketServer } from 'ws';
+
+const server = createServer({
+  cert: readFileSync('/path/to/cert.pem'),
+  key: readFileSync('/path/to/key.pem')
+});
+const wss = new WebSocketServer({ server });
+
+wss.on('connection', function connection(ws) {
+  ws.on('message', function message(data) {
+    console.log('received: %s', data);
+  });
+
+  ws.send('something');
+});
+
+server.listen(8080);
+```
+
+### Multiple servers sharing a single HTTP/S server
+
+```js
+import { createServer } from 'http';
+import { parse } from 'url';
+import { WebSocketServer } from 'ws';
+
+const server = createServer();
+const wss1 = new WebSocketServer({ noServer: true });
+const wss2 = new WebSocketServer({ noServer: true });
+
+wss1.on('connection', function connection(ws) {
+  // ...
+});
+
+wss2.on('connection', function connection(ws) {
+  // ...
+});
+
+server.on('upgrade', function upgrade(request, socket, head) {
+  const { pathname } = parse(request.url);
+
+  if (pathname === '/foo') {
+    wss1.handleUpgrade(request, socket, head, function done(ws) {
+      wss1.emit('connection', ws, request);
+    });
+  } else if (pathname === '/bar') {
+    wss2.handleUpgrade(request, socket, head, function done(ws) {
+      wss2.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+server.listen(8080);
+```
+
+### Client authentication
+
+```js
+import WebSocket from 'ws';
+import { createServer } from 'http';
+
+const server = createServer();
+const wss = new WebSocketServer({ noServer: true });
+
+wss.on('connection', function connection(ws, request, client) {
+  ws.on('message', function message(data) {
+    console.log(`Received message ${data} from user ${client}`);
+  });
+});
+
+server.on('upgrade', function upgrade(request, socket, head) {
+  // This function is not defined on purpose. Implement it with your own logic.
+  authenticate(request, function next(err, client) {
+    if (err || !client) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, function done(ws) {
+      wss.emit('connection', ws, request, client);
+    });
+  });
+});
+
+server.listen(8080);
+```
+
+Also see the provided [example][session-parse-example] using `express-session`.
+
+### Server broadcast
+
+A client WebSocket broadcasting to all connected WebSocket clients, including
+itself.
+
+```js
+import WebSocket, { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('connection', function connection(ws) {
+  ws.on('message', function message(data, isBinary) {
+    wss.clients.forEach(function each(client) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data, { binary: isBinary });
+      }
+    });
+  });
+});
+```
+
+A client WebSocket broadcasting to every other connected WebSocket clients,
+excluding itself.
+
+```js
+import WebSocket, { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('connection', function connection(ws) {
+  ws.on('message', function message(data, isBinary) {
+    wss.clients.forEach(function each(client) {
+      if (client !== ws && client.readyState === WebSocket.OPEN) {
+        client.send(data, { binary: isBinary });
+      }
+    });
+  });
+});
+```
+
+### Round-trip time
+
+```js
+import WebSocket from 'ws';
+
+const ws = new WebSocket('wss://websocket-echo.com/');
+
+ws.on('open', function open() {
+  console.log('connected');
+  ws.send(Date.now());
+});
+
+ws.on('close', function close() {
+  console.log('disconnected');
+});
+
+ws.on('message', function message(data) {
+  console.log(`Round-trip time: ${Date.now() - data} ms`);
+
+  setTimeout(function timeout() {
+    ws.send(Date.now());
+  }, 500);
+});
+```
+
+### Use the Node.js streams API
+
+```js
+import WebSocket, { createWebSocketStream } from 'ws';
+
+const ws = new WebSocket('wss://websocket-echo.com/');
+
+const duplex = createWebSocketStream(ws, { encoding: 'utf8' });
+
+duplex.pipe(process.stdout);
+process.stdin.pipe(duplex);
+```
+
+### Other examples
+
+For a full example with a browser client communicating with a ws server, see the
+examples folder.
+
+Otherwise, see the test cases.
+
+## FAQ
+
+### How to get the IP address of the client?
+
+The remote IP address can be obtained from the raw socket.
+
+```js
+import { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('connection', function connection(ws, req) {
+  const ip = req.socket.remoteAddress;
+});
+```
+
+When the server runs behind a proxy like NGINX, the de-facto standard is to use
+the `X-Forwarded-For` header.
+
+```js
+wss.on('connection', function connection(ws, req) {
+  const ip = req.headers['x-forwarded-for'].split(',')[0].trim();
+});
+```
+
+### How to detect and close broken connections?
+
+Sometimes the link between the server and the client can be interrupted in a way
+that keeps both the server and the client unaware of the broken state of the
+connection (e.g. when pulling the cord).
+
+In these cases ping messages can be used as a means to verify that the remote
+endpoint is still responsive.
+
+```js
+import { WebSocketServer } from 'ws';
+
+function heartbeat() {
+  this.isAlive = true;
 }
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('connection', function connection(ws) {
+  ws.isAlive = true;
+  ws.on('pong', heartbeat);
+});
+
+const interval = setInterval(function ping() {
+  wss.clients.forEach(function each(ws) {
+    if (ws.isAlive === false) return ws.terminate();
+
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on('close', function close() {
+  clearInterval(interval);
+});
 ```
 
-### AXObject to Element
+Pong messages are automatically sent in response to ping messages as required by
+the spec.
 
-```javascript
-import { AXObjectElements } from 'axobject-query';
-```
+Just like the server example above your clients might as well lose connection
+without knowing it. You might want to add a ping listener on your clients to
+prevent that. A simple implementation would be:
 
-AXObjects are mapped to their related HTML concepts, which may require attributes (in the case of inputs) to obtain the correct association.
+```js
+import WebSocket from 'ws';
 
-```
-Map {
-  'AbbrRole' => Set { { name: 'abbr' } },
-  'ArticleRole' => Set { { name: 'article' } },
-  'AudioRole' => Set { { name: 'audio' } },
-  'BlockquoteRole' => Set { { name: 'blockquote' } },
-  'ButtonRole' => Set { { name: 'button' } },
-  'CanvasRole' => Set { { name: 'canvas' } },
-  'CaptionRole' => Set { { name: 'caption' } },
-  'CellRole' => Set { { name: 'td' } },
-  'CheckBoxRole' => Set { { name: 'input', attributes: [Object] } },
-  'ColorWellRole' => Set { { name: 'input', attributes: [Object] } },
-  'ColumnHeaderRole' => Set { { name: 'th' } },
-  'DateRole' => Set { { name: 'input', attributes: [Object] } },
-  'DateTimeRole' => Set { { name: 'input', attributes: [Object] } },
-  'DefinitionRole' => Set { { name: 'dfn' } },
-  'DescriptionListDetailRole' => Set { { name: 'dd' } },
-  'DescriptionListRole' => Set { { name: 'dl' } },
-  'DescriptionListTermRole' => Set { { name: 'dt' } },
-  'DetailsRole' => Set { { name: 'details' } },
-  'DialogRole' => Set { { name: 'dialog' } },
-  'DirectoryRole' => Set { { name: 'dir' } },
-  'DivRole' => Set { { name: 'div' } },
-  'EmbeddedObjectRole' => Set { { name: 'embed' } },
-  'FigcaptionRole' => Set { { name: 'figcaption' } },
-  'FigureRole' => Set { { name: 'figure' } },
-  'FooterRole' => Set { { name: 'footer' } },
-  'FormRole' => Set { { name: 'form' } },
-  'HeadingRole' => Set { { name: 'h1' }, { name: 'h2' }, { name: 'h3' }, { name: 'h4' }, { name: 'h5' }, { name: 'h6' } },
-  'IframeRole' => Set { { name: 'iframe' } },
-  'ImageMapRole' => Set { { name: 'img', attributes: [Object] } },
-  'ImageRole' => Set { { name: 'img' } },
-  'InlineTextBoxRole' => Set { { name: 'input' } },
-  'InputTimeRole' => Set { { name: 'input', attributes: [Object] } },
-  'LabelRole' => Set { { name: 'label' } },
-  'LegendRole' => Set { { name: 'legend' } },
-  'LineBreakRole' => Set { { name: 'br' } },
-  'LinkRole' => Set { { name: 'a', attributes: [Object] } },
-  'ListBoxOptionRole' => Set { { name: 'option' } },
-  'ListItemRole' => Set { { name: 'li' } },
-  'ListRole' => Set { { name: 'ul' }, { name: 'ol' } },
-  'MainRole' => Set { { name: 'main' } },
-  'MarkRole' => Set { { name: 'mark' } },
-  'MarqueeRole' => Set { { name: 'marquee' } },
-  'MenuItemRole' => Set { { name: 'menuitem' } },
-  'MenuRole' => Set { { name: 'menu' } },
-  'MeterRole' => Set { { name: 'meter' } },
-  'NavigationRole' => Set { { name: 'nav' } },
-  'ParagraphRole' => Set { { name: 'p' } },
-  'PreRole' => Set { { name: 'pre' } },
-  'ProgressIndicatorRole' => Set { { name: 'progress' } },
-  'RadioButtonRole' => Set { { name: 'input', attributes: [Object] } },
-  'RowHeaderRole' => Set { { name: 'th', attributes: [Object] } },
-  'RowRole' => Set { { name: 'tr' } },
-  'RubyRole' => Set { { name: 'ruby' } },
-  'SearchBoxRole' => Set { { name: 'input', attributes: [Object] } },
-  'SliderRole' => Set { { name: 'input', attributes: [Object] } },
-  'SpinButtonRole' => Set { { name: 'input', attributes: [Object] } },
-  'TableRole' => Set { { name: 'table' } },
-  'TextFieldRole' => Set { { name: 'input' }, { name: 'input', attributes: [Object] } },
-  'TimeRole' => Set { { name: 'time' } },
-  'VideoRole' => Set { { name: 'video' }
+function heartbeat() {
+  clearTimeout(this.pingTimeout);
+
+  // Use `WebSocket#terminate()`, which immediately destroys the connection,
+  // instead of `WebSocket#close()`, which waits for the close timer.
+  // Delay should be equal to the interval at which your server
+  // sends out pings plus a conservative assumption of the latency.
+  this.pingTimeout = setTimeout(() => {
+    this.terminate();
+  }, 30000 + 1000);
 }
+
+const client = new WebSocket('wss://websocket-echo.com/');
+
+client.on('open', heartbeat);
+client.on('ping', heartbeat);
+client.on('close', function clear() {
+  clearTimeout(this.pingTimeout);
+});
 ```
 
-### AXObject to Role
+### How to connect via a proxy?
 
-```javascript
-import { AXObjectRoles } from 'axobject-query';
-```
+Use a custom `http.Agent` implementation like [https-proxy-agent][] or
+[socks-proxy-agent][].
 
-AXObjects are mapped to their related ARIA concepts..
+## Changelog
 
-```
-Map {
-  'AlertDialogRole' => Set { { name: 'alertdialog' } },
-  'AlertRole' => Set { { name: 'alert' } },
-  'ApplicationRole' => Set { { name: 'application' } },
-  'ArticleRole' => Set { { name: 'article' } },
-  'BannerRole' => Set { { name: 'banner' } },
-  'BusyIndicatorRole' => Set { { attributes: [Object] } },
-  'ButtonRole' => Set { { name: 'button' } },
-  'CellRole' => Set { { name: 'cell' }, { name: 'gridcell' } },
-  'CheckBoxRole' => Set { { name: 'checkbox' } },
-  'ColumnHeaderRole' => Set { { name: 'columnheader' } },
-  'ComboBoxRole' => Set { { name: 'combobox' } },
-  'ComplementaryRole' => Set { { name: 'complementary' } },
-  'ContentInfoRole' => Set { { name: 'structureinfo' } },
-  'DialogRole' => Set { { name: 'dialog' } },
-  'DirectoryRole' => Set { { name: 'directory' } },
-  'DocumentRole' => Set { { name: 'document' } },
-  'FeedRole' => Set { { name: 'feed' } },
-  'FigureRole' => Set { { name: 'figure' } },
-  'FormRole' => Set { { name: 'form' } },
-  'GridRole' => Set { { name: 'grid' } },
-  'GroupRole' => Set { { name: 'group' } },
-  'HeadingRole' => Set { { name: 'heading' } },
-  'ImageRole' => Set { { name: 'img' } },
-  'LinkRole' => Set { { name: 'link' } },
-  'ListBoxOptionRole' => Set { { name: 'option' } },
-  'ListBoxRole' => Set { { name: 'listbox' } },
-  'ListItemRole' => Set { { name: 'listitem' } },
-  'ListRole' => Set { { name: 'list' } },
-  'LogRole' => Set { { name: 'log' } },
-  'MainRole' => Set { { name: 'main' } },
-  'MarqueeRole' => Set { { name: 'marquee' } },
-  'MathRole' => Set { { name: 'math' } },
-  'MenuBarRole' => Set { { name: 'menubar' } },
-  'MenuItemRole' => Set { { name: 'menuitem' } },
-  'MenuItemCheckBoxRole' => Set { { name: 'menuitemcheckbox' } },
-  'MenuItemRadioRole' => Set { { name: 'menuitemradio' } },
-  'MenuRole' => Set { { name: 'menu' } },
-  'NavigationRole' => Set { { name: 'navigation' } },
-  'NoneRole' => Set { { name: 'none' } },
-  'NoteRole' => Set { { name: 'note' } },
-  'PresentationalRole' => Set { { name: 'presentation' } },
-  'ProgressIndicatorRole' => Set { { name: 'progressbar' } },
-  'RadioButtonRole' => Set { { name: 'radio' } },
-  'RadioGroupRole' => Set { { name: 'radiogroup' } },
-  'RegionRole' => Set { { name: 'region' } },
-  'RowHeaderRole' => Set { { name: 'rowheader' } },
-  'RowRole' => Set { { name: 'row' } },
-  'ScrollBarRole' => Set { { name: 'scrollbar' } },
-  'SearchRole' => Set { { name: 'search' } },
-  'SearchBoxRole' => Set { { name: 'searchbox' } },
-  'SliderRole' => Set { { name: 'slider' } },
-  'SpinButtonRole' => Set { { name: 'spinbutton' } },
-  'SplitterRole' => Set { { name: 'separator' } },
-  'StatusRole' => Set { { name: 'status' } },
-  'SwitchRole' => Set { { name: 'switch' } },
-  'TabGroupRole' => Set { { name: 'tablist' } },
-  'TabRole' => Set { { name: 'tab' } },
-  'TableRole' => Set { { name: 'table' } },
-  'TabListRole' => Set { { name: 'tablist' } },
-  'TabPanelRole' => Set { { name: 'tabpanel' } },
-  'TermRole' => Set { { name: 'term' } },
-  'TextFieldRole' => Set { { name: 'textbox' } },
-  'TimerRole' => Set { { name: 'timer' } },
-  'ToggleButtonRole' => Set { { attributes: [Object] } },
-  'ToolbarRole' => Set { { name: 'toolbar' } },
-  'TreeRole' => Set { { name: 'tree' } },
-  'TreeGridRole' => Set { { name: 'treegrid' } },
-  'TreeItemRole' => Set { { name: 'treeitem' } },
-  'UserInterfaceTooltipRole' => Set { { name: 'tooltip' } }
-}
-```
+We're using the GitHub [releases][changelog] for changelog entries.
 
-### Element to AXObject
+## License
 
-```javascript
-import { elementAXObjects } from 'axobject-query';
-```
+[MIT](LICENSE)
 
-HTML elements are mapped to their related AXConcepts concepts.
-
-```
-Map {
-  { name: 'abbr' } => Set { 'AbbrRole' },
-  { name: 'article' } => Set { 'ArticleRole' },
-  { name: 'audio' } => Set { 'AudioRole' },
-  { name: 'blockquote' } => Set { 'BlockquoteRole' },
-  { name: 'button' } => Set { 'ButtonRole' },
-  { name: 'canvas' } => Set { 'CanvasRole' },
-  { name: 'caption' } => Set { 'CaptionRole' },
-  { name: 'td' } => Set { 'CellRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'CheckBoxRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'ColorWellRole' },
-  { name: 'th' } => Set { 'ColumnHeaderRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'DateRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'DateTimeRole' },
-  { name: 'dfn' } => Set { 'DefinitionRole' },
-  { name: 'dd' } => Set { 'DescriptionListDetailRole' },
-  { name: 'dl' } => Set { 'DescriptionListRole' },
-  { name: 'dt' } => Set { 'DescriptionListTermRole' },
-  { name: 'details' } => Set { 'DetailsRole' },
-  { name: 'dialog' } => Set { 'DialogRole' },
-  { name: 'dir' } => Set { 'DirectoryRole' },
-  { name: 'div' } => Set { 'DivRole' },
-  { name: 'embed' } => Set { 'EmbeddedObjectRole' },
-  { name: 'figcaption' } => Set { 'FigcaptionRole' },
-  { name: 'figure' } => Set { 'FigureRole' },
-  { name: 'footer' } => Set { 'FooterRole' },
-  { name: 'form' } => Set { 'FormRole' },
-  { name: 'h1' } => Set { 'HeadingRole' },
-  { name: 'h2' } => Set { 'HeadingRole' },
-  { name: 'h3' } => Set { 'HeadingRole' },
-  { name: 'h4' } => Set { 'HeadingRole' },
-  { name: 'h5' } => Set { 'HeadingRole' },
-  { name: 'h6' } => Set { 'HeadingRole' },
-  { name: 'iframe' } => Set { 'IframeRole' },
-  { name: 'img', attributes: [ [Object] ] } => Set { 'ImageMapRole' },
-  { name: 'img' } => Set { 'ImageRole' },
-  { name: 'input' } => Set { 'InlineTextBoxRole', 'TextFieldRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'InputTimeRole' },
-  { name: 'label' } => Set { 'LabelRole' },
-  { name: 'legend' } => Set { 'LegendRole' },
-  { name: 'br' } => Set { 'LineBreakRole' },
-  { name: 'a', attributes: [ [Object] ] } => Set { 'LinkRole' },
-  { name: 'option' } => Set { 'ListBoxOptionRole' },
-  { name: 'li' } => Set { 'ListItemRole' },
-  { name: 'ul' } => Set { 'ListRole' },
-  { name: 'ol' } => Set { 'ListRole' },
-  { name: 'main' } => Set { 'MainRole' },
-  { name: 'mark' } => Set { 'MarkRole' },
-  { name: 'marquee' } => Set { 'MarqueeRole' },
-  { name: 'menuitem' } => Set { 'MenuItemRole' },
-  { name: 'menu' } => Set { 'MenuRole' },
-  { name: 'meter' } => Set { 'MeterRole' },
-  { name: 'nav' } => Set { 'NavigationRole' },
-  { name: 'p' } => Set { 'ParagraphRole' },
-  { name: 'pre' } => Set { 'PreRole' },
-  { name: 'progress' } => Set { 'ProgressIndicatorRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'RadioButtonRole' },
-  { name: 'th', attributes: [ [Object] ] } => Set { 'RowHeaderRole' },
-  { name: 'tr' } => Set { 'RowRole' },
-  { name: 'ruby' } => Set { 'RubyRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'SearchBoxRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'SliderRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'SpinButtonRole' },
-  { name: 'table' } => Set { 'TableRole' },
-  { name: 'input' } => Set { 'InlineTextBoxRole', 'TextFieldRole' },
-  { name: 'input', attributes: [ [Object] ] } => Set { 'TextFieldRole' },
-  { name: 'time' } => Set { 'TimeRole' },
-  { name: 'video' } => Set { 'VideoRole' }
-}
-```
+[changelog]: https://github.com/websockets/ws/releases
+[client-report]: http://websockets.github.io/ws/autobahn/clients/
+[https-proxy-agent]: https://github.com/TooTallNate/node-https-proxy-agent
+[node-zlib-bug]: https://github.com/nodejs/node/issues/8871
+[node-zlib-deflaterawdocs]:
+  https://nodejs.org/api/zlib.html#zlib_zlib_createdeflateraw_options
+[permessage-deflate]: https://tools.ietf.org/html/rfc7692
+[server-report]: http://websockets.github.io/ws/autobahn/servers/
+[session-parse-example]: ./examples/express-session-parse
+[socks-proxy-agent]: https://github.com/TooTallNate/node-socks-proxy-agent
+[ws-server-options]:
+  https://github.com/websockets/ws/blob/master/doc/ws.md#new-websocketserveroptions-callback
